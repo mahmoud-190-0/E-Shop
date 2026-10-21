@@ -25,14 +25,15 @@ exports.setSubcategoryIdToBody = (req, res, next) => {
 exports.createFilterObject = (req, res, next) => {
     let filterObject = {};
 
-    // Filter products by subcategoryId if it exists in params
-    if (req.params.subcategoryId) filterObject = { subcategory: req.params.subcategoryId };
+    if (req.params.subcategoryId) {
+        filterObject = {
+            subcategories: req.params.subcategoryId,
+        };
+    }
 
-    // Attach filter object to request for the factory handler
     req.filterObj = filterObject;
     next();
 };
-
 /**************************** IMAGE MIDDLEWARE *******************************/
 
 // @desc    Resize the uploaded product images (cover + gallery) and upload them to Cloudinary

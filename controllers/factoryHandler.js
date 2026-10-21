@@ -20,8 +20,17 @@ exports.getAll = (Model, ModelName = ``) =>
   asyncHandler(async (req, res) => {
     // Build the base filter (allows nested filters like subcategories)
     const filter = req.filterObj || {};
-
+    console.log("Factory Filter:", req.filterObj);
     // Count total documents for pagination metadata
+
+
+    const count = await Model.countDocuments(filter);
+    console.log("Matching Products:", count);
+
+    const testProducts = await Model.find(filter);
+    console.log("Products Found:", testProducts);
+
+
     const countD = await Model.countDocuments(filter);
 
     // Build the query with all API features chained
