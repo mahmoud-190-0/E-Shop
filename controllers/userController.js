@@ -56,6 +56,26 @@ exports.getSpecificUser = factory.getOne(User);
 // @route   POST /api/v1/users
 // @access  Private (admin only)
 exports.createUser = factory.createOne(User);
+// @desc    Activate a specific user by id
+// @route   PUT /api/v1/users/:id/activate
+// @access  Private (admin only)
+exports.activateUser = asyncHandler(async (req, res, next) => {
+    // 1) Find the user by id.
+    const user = await User.findById(req.params.id);
+    if (!user) {
+        return next(new ApiError("User not found", 404));
+    }
+
+    // 2) Reactivate the user.
+    user.active = true;
+    await user.save();
+
+    // 3) Respond with a success message.
+    res.status(200).json({
+        status: "success",
+        message: "User activated successfully",
+    });
+});
 
 // @desc    Update a specific user by id
 // @route   PUT /api/v1/users/:id
@@ -116,26 +136,7 @@ exports.deactivateUser = asyncHandler(async (req, res, next) => {
     });
 });
 
-// @desc    Activate a specific user by id
-// @route   PUT /api/v1/users/:id/activate
-// @access  Private (admin only)
-exports.activateUser = asyncHandler(async (req, res, next) => {
-    // 1) Find the user by id.
-    const user = await User.findById(req.params.id);
-    if (!user) {
-        return next(new ApiError("User not found", 404));
-    }
 
-    // 2) Reactivate the user.
-    user.active = true;
-    await user.save();
-
-    // 3) Respond with a success message.
-    res.status(200).json({
-        status: "success",
-        message: "User activated successfully",
-    });
-});
 
 // @desc    Change a specific user's password by id
 // @route   PUT /api/v1/users/changePassword/:id

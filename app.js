@@ -24,6 +24,7 @@ const orderRoute = require("./routes/orderRoute.js");
 const app = express();
 
 // ================= Middleware =================
+app.use("/api/v1/orders/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
 
 app.use(compression());
@@ -37,8 +38,8 @@ app.use(express.static(path.join(__dirname, "uploads")));
 
 app.use(
     cors({
-        origin: "http://localhost:5173",
-        methods: ["GET", "POST", "PUT", "DELETE"],
+        origin: "http://localhost:5174",
+        methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
         credentials: true,
     }),
 );

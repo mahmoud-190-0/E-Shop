@@ -33,6 +33,11 @@ const orderSchema = new mongoose.Schema(
       enum: ["card", "cash"],
       default: "cash",
     },
+    stripeSessionId: {
+      type: String,
+      unique: true,
+      sparse: true, // allows multiple docs without this field (cash orders)
+    },
 
     status: {
       type: String,

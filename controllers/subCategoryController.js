@@ -6,7 +6,7 @@ const factory = require("./factoryHandler");
 // @desc    Set the categoryId from route params into the request body
 // @route   Middleware (used in nested subcategory routes)
 // @access  Private
-exports.setcategoryIdToBody = (req, res, next) => {
+exports.setCategoryIdToBody = (req, res, next) => {
   // Only set it if not already provided in the body
   if (!req.body.category) req.body.category = req.params.categoryId;
   next();
@@ -15,7 +15,7 @@ exports.setcategoryIdToBody = (req, res, next) => {
 // @desc    Build a filter object based on categoryId from route params
 // @route   Middleware (used in nested subcategory routes)
 // @access  Public
-exports.createfillterobject = (req, res, next) => {
+exports.createFilterObject = (req, res, next) => {
   let filterObject = {};
 
   // Filter subcategories by categoryId if it exists in params

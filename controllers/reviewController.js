@@ -18,7 +18,7 @@ exports.setProductIdAndUserIdToBody = (req, res, next) => {
 // @desc    Build a filter object based on productId from route params
 // @route   Middleware (used in nested reviews routes)
 // @access  Public
-exports.createfillterobject = (req, res, next) => {
+exports.createFilterObject = (req, res, next) => {
     let filterObject = {};
 
     // Filter reviews by productId if it exists in params

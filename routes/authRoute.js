@@ -8,6 +8,7 @@ const {
   forgotPasswordValidator,
   verifyResetCodeValidator,
   resetPasswordValidator,
+  resendResetCodeValidator,
 } = require("../utils/Validators/authValidator.js");
 
 const {
@@ -16,7 +17,8 @@ const {
   forgotPassword,
   verifyResetCode,
   resetPassword,
-  authLimiter
+  authLimiter,
+  resendResetCode,
 } = require("../controllers/authController.js");
 
 // ==================== Routes ====================
@@ -25,14 +27,30 @@ const {
 router.post("/signup", signupValidator, signup);
 
 // POST /auth/login          → log in an existing user (with validation)
-router.post("/login", authLimiter, loginValidator, login);
+router.post("/login",
+  // authLimiter,
+  loginValidator, login);
 
 // POST /auth/forgotPassword → request a password reset code by email
-router.post("/forgotPassword", authLimiter, forgotPasswordValidator, forgotPassword);
+router.post(
+  "/forgotPassword",
+  authLimiter,
+  forgotPasswordValidator,
+  forgotPassword,
+);
 
 // POST /auth/verifyResetCode → verify the code sent to the user's email
-router.post("/verifyResetCode", authLimiter, verifyResetCodeValidator, verifyResetCode);
-
+router.post(
+  "/verifyResetCode",
+  authLimiter,
+  verifyResetCodeValidator,
+  verifyResetCode,
+);
+// POST /auth/resendResetCode → resend the reset code to the user's email
+router.post("/resendResetCode",
+  resendResetCodeValidator,
+  authLimiter,
+  resendResetCode);
 // PUT  /auth/resetPassword  → reset the password after verification
 router.put("/resetPassword", resetPasswordValidator, resetPassword);
 

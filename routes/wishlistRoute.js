@@ -8,6 +8,7 @@ const {
     addToWishlist,
     removeFromWishlist,
     getLoggedUserWishlist,
+    clearWishlist
 } = require("../controllers/wishlistController.js");
 
 const {
@@ -40,6 +41,13 @@ router
         authController.allowedTo("user"),
         removeFromWishlistValidator,
         removeFromWishlist,
+    );
+router
+    .route("/")
+    .delete(
+        authController.protect,
+        authController.allowedTo("user"),
+        clearWishlist
     );
 
 module.exports = router;

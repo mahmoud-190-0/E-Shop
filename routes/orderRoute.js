@@ -13,6 +13,7 @@ const {
 } = require("../controllers/orderController.js");
 
 // Auth & Middleware
+const { webhookCheckout } = require("../controllers/orderController");
 const { protect, allowedTo } = require("../controllers/authController.js");
 
 const userOnly = allowedTo("user");
@@ -44,4 +45,6 @@ router.put("/:id/status", protect, adminOrManager, updateOrderStatus);
 // PUT /:id/cancel → user cancels their own order
 router.put("/:id/cancel", protect, userOnly, cancelOrderByUser);
 
+// POST /webhook → Stripe webhook for checkout session completed
+router.post("/webhook", webhookCheckout);
 module.exports = router;

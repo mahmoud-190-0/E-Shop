@@ -18,6 +18,10 @@ exports.addToCart = asyncHandler(async (req, res, next) => {
     return next(new ApiError("Product not found", 404));
   }
 
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    return next(new ApiError("Invalid quantity", 400));
+  }
+
   // 2) Get the user's cart (if any).
   let cart = await Cart.findOne({ user: req.user._id });
 
@@ -69,6 +73,7 @@ exports.addToCart = asyncHandler(async (req, res, next) => {
     data: cart,
   });
 });
+
 
 // @desc    Get user cart
 // @route   GET /api/v1/cart
@@ -195,10 +200,7 @@ exports.applyCouponToCart = asyncHandler(async (req, res, next) => {
       return next(new ApiError("Coupon expired", 400));
     }
 
-    // 6) Reject if the user already used this coupon.
-    if (coupon.usedBy.includes(req.user._id)) {
-      return next(new ApiError("You already used this coupon", 400));
-    }
+
 
     // 7) Reject if the coupon's usage limit is reached.
     if (coupon.usedCount >= coupon.usageLimit) {
@@ -221,8 +223,6 @@ exports.applyCouponToCart = asyncHandler(async (req, res, next) => {
     await cart.save({ session });
 
     // 11) Track coupon usage for this user (inside the transaction).
-    coupon.usedBy.push(req.user._id);
-    coupon.usedCount += 1;
     await coupon.save({ session });
 
     // 12) Commit both writes atomically.
@@ -266,6 +266,52 @@ exports.removeCouponFromCart = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     status: "success",
     message: "Coupon removed successfully",
+    data: cart,
+  });
+});
+
+// @desc    Update cart item quantity
+// @route   PATCH /api/v1/cart/:productId
+// @access  Private
+exports.updateCartItemQuantity = asyncHandler(async (req, res, next) => {
+  const { productId } = req.params;
+  const { quantity } = req.body;
+
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    return next(new ApiError("Invalid quantity", 400));
+  }
+
+  const cart = await Cart.findOne({ user: req.user._id });
+  if (!cart) {
+    return next(new ApiError("Cart not found", 404));
+  }
+
+  const item = cart.cartItems.find(
+    (item) => item.product.toString() === productId,
+  );
+  if (!item) {
+    return next(new ApiError("Product not found in cart", 404));
+  }
+
+  // Optional: validate against product stock
+  const product = await Product.findById(productId);
+  if (product && quantity > product.quantity) {
+    return next(new ApiError("Requested quantity exceeds stock", 400));
+  }
+
+  item.quantity = quantity;
+
+  cart.totalPrice = cart.cartItems.reduce(
+    (sum, i) => sum + i.price * i.quantity,
+    0,
+  );
+  cart.totalPriceAfterDiscount = cart.totalPrice - cart.discountValue;
+
+  await cart.save();
+
+  res.status(200).json({
+    status: "success",
+    message: "Quantity updated",
     data: cart,
   });
 });

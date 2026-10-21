@@ -7,44 +7,78 @@ const uploadToCloudinary = require("../utils/uploadToCloudinary");
 const Product = require("../models/productModel");
 const factory = require("./factoryHandler");
 
+
+/* ************ PRODUCTS WITH SUBCATEGORY MIDDLEWARE ***********/
+
+// @desc    Set the subcategoryId from route params into the request body
+// @route   Middleware (used in nested product routes)
+// @access  Private
+exports.setSubcategoryIdToBody = (req, res, next) => {
+    // Only set it if not already provided in the body
+    if (!req.body.subcategory) req.body.subcategory = req.params.subcategoryId;
+    next();
+};
+
+// @desc    Build a filter object based on subcategoryId from route params
+// @route   Middleware (used in nested product routes)
+// @access  Public
+exports.createFilterObject = (req, res, next) => {
+    let filterObject = {};
+
+    // Filter products by subcategoryId if it exists in params
+    if (req.params.subcategoryId) filterObject = { subcategory: req.params.subcategoryId };
+
+    // Attach filter object to request for the factory handler
+    req.filterObj = filterObject;
+    next();
+};
+
 /**************************** IMAGE MIDDLEWARE *******************************/
 
 // @desc    Resize the uploaded product images (cover + gallery) and upload them to Cloudinary
 // @route   Middleware (used before create/update product routes)
 // @access  Private
+
 exports.resizeProductImage = asyncHandler(async (req, res, next) => {
-    // Resize and upload the image cover (single image)
-    if (req.files.imageCover) {
-        const imageCoverBuffer = await sharp(req.files.imageCover[0].buffer)
+    // Resize and upload the image cover
+    if (req.files?.imageCover?.length) {
+        const imageCoverBuffer = await sharp(
+            req.files.imageCover[0].buffer
+        )
             .resize(600, 600)
-            .toFormat("jpeg")
-            .jpeg({ quality: 100 })
+            .jpeg({ quality: 90 })
             .toBuffer();
 
-        const imageUrl = await uploadToCloudinary(imageCoverBuffer, "products");
+        const imageUrl = await uploadToCloudinary(
+            imageCoverBuffer,
+            "products"
+        );
+
         req.body.imageCover = imageUrl;
     }
 
-    // Resize and upload the gallery images (multiple images)
-    if (req.files.images) {
-        req.body.images = [];
-
-        await Promise.all(
+    // Resize and upload gallery images
+    if (req.files?.images?.length) {
+        const imagesUrls = await Promise.all(
             req.files.images.map(async (img) => {
                 const imagesBuffer = await sharp(img.buffer)
                     .resize(600, 600)
-                    .toFormat("jpeg")
-                    .jpeg({ quality: 100 })
+                    .jpeg({ quality: 90 })
                     .toBuffer();
 
-                const imageUrl = await uploadToCloudinary(imagesBuffer, "products");
-                req.body.images.push(imageUrl);
-            }),
+                return uploadToCloudinary(
+                    imagesBuffer,
+                    "products"
+                );
+            })
         );
+
+        req.body.images = imagesUrls;
     }
 
     next();
 });
+
 
 // @desc    Upload mixed product images (imageCover: 1, images: 5)
 // @route   Middleware (used before create/update product routes)
@@ -53,6 +87,8 @@ exports.uploadProductImage = uploadMixImage([
     { name: "imageCover", maxCount: 1 },
     { name: "images", maxCount: 5 },
 ]);
+
+
 
 /* *************************** PRODUCTS CONTROLLERS *******************************/
 

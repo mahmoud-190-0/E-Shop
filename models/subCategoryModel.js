@@ -16,7 +16,7 @@ const subCategorySchema = new mongoose.Schema(
     },
     category: {
       type: mongoose.Schema.ObjectId,
-    ref: "Category",
+      ref: "Category",
       required: [true, "subCategory must refer to parent category"],
     },
   },

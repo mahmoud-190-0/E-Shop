@@ -18,7 +18,7 @@ const {
   updateProduct,
   deleteProduct,
   uploadProductImage,
-  resizeProductImage,
+  resizeProductImage, setSubcategoryIdToBody, createFilterObject
 } = require("../controllers/productController.js");
 
 const adminOnly = [
@@ -29,8 +29,10 @@ const adminOnly = [
 // Nested reviews router
 const reviewRouter = require("./reviewRoute.js");
 
-const router = express.Router();
 
+
+//
+const router = require("express").Router({ mergeParams: true });
 // ==================== Nested Routes ====================
 
 // Mount reviews router under /:productId/reviews
@@ -45,9 +47,10 @@ router
     uploadProductImage,
     resizeProductImage,
     createProductValidator,
+    setSubcategoryIdToBody,
     createProduct,
   )
-  .get(getProduct);
+  .get(createFilterObject, getProduct);
 
 router
   .route("/:id")

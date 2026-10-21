@@ -6,7 +6,7 @@ const {
   getSubCategoryValidator,
   updateSubCategoryValidator,
   deleteSubCategoryValidator,
-} = require("../utils/validators/subCategoryValidator");
+} = require("../utils/Validators/subCategoryValidator.js");
 
 // Import subcategory controllers
 const {
@@ -15,16 +15,22 @@ const {
   getSpecificSubCategory,
   updateSubCategory,
   deleteSubCategory,
-  setcategoryIdToBody,
-  createfillterobject,
+  setCategoryIdToBody,
+  createFilterObject,
 } = require("../controllers/subCategoryController.js");
 
 // Import auth controller
 const authController = require("../controllers/authController.js");
 
-// Create a new router instance (mergeParams enabled to access parent route params like categoryId)
-const router = express.Router({ mergeParams: true });
+// Nested products router
+const productRouter = require("./productRoute.js");
 
+const router = require("express").Router({ mergeParams: true });
+
+// ==================== Nested Routes ====================
+
+// Mount product router under /:subcategoriesId/product
+router.use("/:subcategoryId/products", productRouter);
 // ==================== Routes ====================
 
 // Root route "/" (GET, POST)
@@ -35,13 +41,13 @@ router
   .post(
     authController.protect,
     authController.allowedTo("admin", "manager"),
-    setcategoryIdToBody,
+    setCategoryIdToBody,
     createSubCategoryValidator,
     createSubCategory
   )
 
   // Get all subcategories (with filtering applied, public)
-  .get(createfillterobject, getSubCategories);
+  .get(createFilterObject, getSubCategories);
 
 // Route "/:id" — deals with one subcategory (GET, PUT, DELETE)
 router

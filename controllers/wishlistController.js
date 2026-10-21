@@ -1,7 +1,6 @@
 const asyncHandler = require("express-async-handler");
 
 const User = require("../models/userModel");
-const Product = require("../models/productModel");
 const ApiError = require("../utils/ApiError");
 
 // @desc    Add a product to the logged-in user's wishlist
@@ -86,6 +85,25 @@ exports.getLoggedUserWishlist = asyncHandler(async (req, res, next) => {
     res.status(200).json({
         status: "success",
         results: user.wishlist.length,
+        data: user.wishlist,
+    });
+});
+
+// @desc    Clear entire wishlist
+// @route   DELETE /api/wishlist
+// @access  Private
+exports.clearWishlist = asyncHandler(async (req, res, next) => {
+    const user = await User.findByIdAndUpdate(
+        req.user._id,
+        {
+            wishlist: [],
+        },
+        { new: true }
+    );
+
+    res.status(200).json({
+        status: "success",
+        message: "Wishlist cleared successfully",
         data: user.wishlist,
     });
 });

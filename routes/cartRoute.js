@@ -11,7 +11,7 @@ const {
     removeFromCart,
     clearCart,
     applyCouponToCart,
-    removeCouponFromCart,
+    removeCouponFromCart, updateCartItemQuantity
 } = require("../controllers/cartController.js");
 
 // Validators
@@ -33,6 +33,14 @@ router.put(
     allowedUser,
     applyCouponValidator,
     applyCouponToCart,
+);
+// PATCH /cart/:productId → update quantity of a specific product
+
+router.patch(
+    "/:productId",
+    protect,
+    allowedUser,
+    updateCartItemQuantity,
 );
 
 // DELETE /cart/removeCoupon → remove the coupon from the cart

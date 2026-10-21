@@ -58,16 +58,7 @@ exports.signupValidator = [
     .isLength({ min: 6 })
     .withMessage("User password must be at least 6 characters"),
 
-  // Confirm password: required, must match
-  check("confirmPassword")
-    .notEmpty()
-    .withMessage("Confirm password is required")
-    .custom((val, { req }) => {
-      if (val !== req.body.password) {
-        throw new Error("Password confirmation does not match password");
-      }
-      return true;
-    }),
+
 
   validatorMiddleware,
 ];
@@ -89,6 +80,16 @@ exports.loginValidator = [
 // ==================== Forgot Password ====================
 
 exports.forgotPasswordValidator = [
+  check("email")
+    .notEmpty()
+    .withMessage("Email required")
+    .isEmail()
+    .withMessage("Invalid email"),
+  validatorMiddleware,
+];
+// ==================== Resend Reset Code ====================
+
+exports.resendResetCodeValidator = [
   check("email")
     .notEmpty()
     .withMessage("Email required")
@@ -123,15 +124,7 @@ exports.resetPasswordValidator = [
     .isLength({ min: 6, max: 32 })
     .withMessage("Password must be 6-32 characters"),
 
-  check("confirmPassword")
-    .notEmpty()
-    .withMessage("Confirm password required")
-    .custom((val, { req }) => {
-      if (val !== req.body.newPassword) {
-        throw new Error("Password confirmation does not match new password");
-      }
-      return true;
-    }),
+
 
   validatorMiddleware,
 ];

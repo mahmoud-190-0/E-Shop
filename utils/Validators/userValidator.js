@@ -30,9 +30,7 @@ exports.createUserValidator = [
     .custom((val) =>
       User.findOne({ email: val }).then((user) => {
         if (user) {
-          return Promise.reject(
-            new Error("Email already exists"),
-          );
+          return Promise.reject(new Error("Email already exists"));
         }
       }),
     ),
@@ -49,17 +47,6 @@ exports.createUserValidator = [
     .withMessage("User password is required")
     .isLength({ min: 6 })
     .withMessage("User password must be at least 6 characters"),
-
-  // Confirm password: required, must match password
-  check("confirmPassword")
-    .notEmpty()
-    .withMessage("User confirm password is required")
-    .custom((val, { req }) => {
-      if (val !== req.body.password) {
-        throw new Error("Password confirmation does not match password");
-      }
-      return true;
-    }),
 
   // Role: optional, must be user/manager/admin
   check("role")
@@ -171,17 +158,6 @@ exports.changeUserPasswordValidator = [
     .isLength({ min: 6 })
     .withMessage("Password must be at least 6 characters"),
 
-  // Confirm password: required, must match new password
-  body("confirmPassword")
-    .notEmpty()
-    .withMessage("Confirm password is required")
-    .custom((val, { req }) => {
-      if (val !== req.body.newPassword) {
-        throw new Error("Password confirmation does not match new password");
-      }
-      return true;
-    }),
-
   validatorMiddleware,
 ];
 
@@ -219,17 +195,6 @@ exports.changeLoggedUserPasswordValidator = [
       return true;
     }),
 
-  // Confirm password: required, must match new password
-  body("confirmPassword")
-    .notEmpty()
-    .withMessage("Confirm password is required")
-    .custom((val, { req }) => {
-      if (val !== req.body.newPassword) {
-        throw new Error("Password confirmation does not match new password");
-      }
-      return true;
-    }),
-
   validatorMiddleware,
 ];
 
@@ -242,13 +207,8 @@ exports.updateLoggedUserDataValidator = [
     .isLength({ min: 2 })
     .withMessage("User name must be at least 2 characters")
     .isLength({ max: 32 })
-    .withMessage("User name must be less than 32 characters")
-    .custom((val, { req }) => {
-      req.body.slug = slugify(val, { lower: true });
-      return true;
-    }),
+    .withMessage("User name must be less than 32 characters"),
 
-  // Email: optional, valid format, unique (excluding current user)
   check("email")
     .optional()
     .isEmail()

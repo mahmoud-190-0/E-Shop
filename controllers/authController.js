@@ -40,7 +40,9 @@ exports.signup = asyncHandler(async (req, res, next) => {
 // @access  Public
 exports.login = asyncHandler(async (req, res, next) => {
     // 1) Get the user by email and include the password field
-    const user = await User.findOne({ email: req.body.email }).select("+password");
+    const user = await User.findOne({ email: req.body.email }).select(
+        "+password",
+    );
 
     // 2) Reject invalid credentials (same message for both cases for security)
     if (!user || !(await bcrypt.compare(req.body.password, user.password))) {
@@ -160,7 +162,7 @@ exports.forgotPassword = asyncHandler(async (req, res, next) => {
 
     // 4) Save hashed code + 10-min expiry + reset verification flag
     user.passwordResetCode = hashedResetCode;
-    user.passwordResetExpires = Date.now() + 10 * 60 * 1000;
+    user.passwordResetExpires = Date.now() + 10 * 60 * 1000; //CHANGE TO 10 MINUTES IN PRODUCTION
     user.passwordResetVerified = false;
     await user.save();
 
@@ -184,6 +186,57 @@ exports.forgotPassword = asyncHandler(async (req, res, next) => {
     res.status(200).json({
         status: "success",
         message: "Reset code sent",
+    });
+});
+
+//@desc     Resend the reset code to the user's email
+// @route   POST /api/v1/auth/resendResetCode
+// @access  Public
+exports.resendResetCode = asyncHandler(async (req, res, next) => {
+    // 1) Get user by email
+    const user = await User.findOne({ email: req.body.email });
+    if (!user) {
+        return next(new ApiError("There is no user with this email", 404));
+    }
+
+    // 2) Generate new 6-digit code
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // 3) Hash code
+    const hashedResetCode = crypto
+        .createHash("sha256")
+        .update(resetCode)
+        .digest("hex");
+
+    // 4) Save new code + expiry + reset flag
+    user.passwordResetCode = hashedResetCode;
+    user.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 min
+    user.passwordResetVerified = false;
+
+    await user.save();
+
+    // 5) Send email
+    const message = `Hi ${user.name}, your new reset code is:\n${resetCode}\nThis code will expire in 10 minutes.`;
+
+    try {
+        await sendEmail({
+            email: user.email,
+            subject: "Resend Reset Code",
+            message,
+        });
+    } catch (err) {
+        // rollback if email fails
+        user.passwordResetCode = undefined;
+        user.passwordResetExpires = undefined;
+        user.passwordResetVerified = undefined;
+        await user.save();
+
+        return next(new ApiError("There was an error sending the email", 500));
+    }
+
+    res.status(200).json({
+        status: "success",
+        message: "Reset code resent successfully",
     });
 });
 
@@ -221,7 +274,9 @@ exports.verifyResetCode = asyncHandler(async (req, res, next) => {
 // @access  Public
 exports.resetPassword = asyncHandler(async (req, res, next) => {
     // 1) Get the user by email (include password for the "same password" check)
-    const user = await User.findOne({ email: req.body.email }).select("+password");
+    const user = await User.findOne({ email: req.body.email }).select(
+        "+password",
+    );
     if (!user) {
         return next(new ApiError("User not found", 404));
     }
@@ -238,10 +293,7 @@ exports.resetPassword = asyncHandler(async (req, res, next) => {
     );
     if (isSamePassword) {
         return next(
-            new ApiError(
-                "New password cannot be the same as the old password",
-                400,
-            ),
+            new ApiError("New password cannot be the same as the old password", 400),
         );
     }
 
@@ -253,16 +305,57 @@ exports.resetPassword = asyncHandler(async (req, res, next) => {
     await user.save();
 
     // 5) Issue a new token
-    const token = generateToken(user._id);
     res.status(200).json({
         status: "success",
-        token,
+        message: "Password reset successful",
     });
 });
 
 // @desc    Rate limiter for auth endpoints
 exports.authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 min
-    max: 10,                  // 10 requests per IP
+    max: 10, // 10 requests per IP
     message: "Too many attempts, please try again later",
 });
+
+
+//@desc     Login With Google
+// @route   POST /api/v1/auth/google-login
+// @access  Public
+
+// Called after successful Google auth
+exports.googleCallback = (req, res) => {
+    if (!req.user) {
+        return res.redirect(`${process.env.CLIENT_URL}/login?error=auth_failed`);
+    }
+
+
+    // Option B — JWT-based (redirect with token for SPA)
+    const token = generateToken(req.user);
+    res.redirect(`${process.env.CLIENT_URL}/oauth-success?token=${token}`);
+};
+
+// Return current authenticated user
+exports.getCurrentUser = (req, res) => {
+    if (!req.user) {
+        return res.status(401).json({ success: false, message: 'Not authenticated' });
+    }
+    res.json({ success: true, user: req.user });
+};
+
+// Logout
+exports.logout = (req, res, next) => {
+    req.logout((err) => {
+        if (err) return next(err);
+        req.session.destroy(() => {
+            res.clearCookie('connect.sid');
+            res.json({ success: true, message: 'Logged out successfully' });
+        });
+    });
+};
+
+// Auth failure handler
+exports.authFailure = (req, res) => {
+    res.status(401).json({ success: false, message: 'Google authentication failed' });
+};
+

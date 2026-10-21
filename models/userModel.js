@@ -6,6 +6,8 @@ const slugify = require("slugify");
 
 const userSchema = new mongoose.Schema(
     {
+        googleId: { type: String, unique: true, sparse: true },
+        provider: { type: String, enum: ['google', 'local'] },
         name: {
             type: String,
             required: [true, "Name required."],

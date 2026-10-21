@@ -1,5 +1,7 @@
+const mongoose = require("mongoose");
 const asyncHandler = require("express-async-handler");
 
+const stripe = require("../config/stripe");
 const ApiError = require("../utils/ApiError");
 const Cart = require("../models/cartModel");
 const Order = require("../models/orderModel");
@@ -319,7 +321,7 @@ exports.cancelOrderByUser = asyncHandler(async (req, res, next) => {
 });
 
 // @desc    Create a Stripe checkout session
-// @route   GET /api/v1/orders/checkout-session//:cartId
+// @route   GET /api/v1/orders/checkout-session/:cartId
 // @access  Private (user only)
 exports.createCheckoutSession = asyncHandler(async (req, res, next) => {
     // 1) App-level pricing config (currently zero).
@@ -328,22 +330,20 @@ exports.createCheckoutSession = asyncHandler(async (req, res, next) => {
 
     // 2) Get the user's cart.
     const cart = await Cart.findOne({ user: req.user._id });
-
-    // 3) Ensure the cart exists and is not empty.
     if (!cart || cart.cartItems.length === 0) {
         return next(new ApiError("Cart is empty", 400));
     }
 
-    // 4) Compute the price to charge.
+    // 3) Compute the price to charge.
     //    Prefer the discounted total when a coupon was applied.
     const cartPrice = cart.totalPriceAfterDiscount || cart.totalPrice;
     const totalPrice = cartPrice + taxPrice + shippingPrice;
     const finalPrice = Math.floor(totalPrice);
 
-    // 5) Stripe expects the smallest currency unit (e.g. piasters for EGP).
+    // 4) Stripe expects the smallest currency unit (piasters for EGP).
     const amount = Math.round(finalPrice * 100);
 
-    // 6) Create the Stripe checkout session.
+    // 5) Create the Stripe checkout session.
     const session = await stripe.checkout.sessions.create({
         line_items: [
             {
@@ -361,16 +361,147 @@ exports.createCheckoutSession = asyncHandler(async (req, res, next) => {
         success_url: `${req.protocol}://${req.get("host")}/orders`,
         cancel_url: `${req.protocol}://${req.get("host")}/cart`,
         customer_email: req.user.email,
-        client_reference_id: req.params.cartId,
+        // ✅ Use the ACTUAL cart._id, not req.params.cartId (which may be undefined)
+        client_reference_id: cart._id.toString(),
         metadata: {
             userId: req.user._id.toString(),
-            // address: JSON.stringify(req.body.shippingAddress),
+            // cartId: cart._id.toString(), // ← redundant if using client_reference_id
+            // shippingAddress: JSON.stringify(req.body.shippingAddress),
         },
     });
 
-    // 7) Respond with the session.
+    // 6) Respond with the session.
     res.status(200).json({
         status: "success",
         session,
     });
 });
+
+// @desc    Handle Stripe webhook for payment confirmation
+// @route   POST /api/v1/orders/webhook
+// @access  Public (Stripe calls this endpoint)
+exports.webhookCheckout = asyncHandler(async (req, res, next) => {
+    // 1) Get the signature from the Stripe header
+    const sig = req.headers["stripe-signature"];
+
+    // 2) Verify the event came from Stripe
+    let event;
+    try {
+        event = stripe.webhooks.constructEvent(
+            req.body,
+            sig,
+            process.env.STRIPE_WEBHOOK_SECRET,
+        );
+    } catch (err) {
+        console.log("❌ WEBHOOK ERROR:", err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    console.log("🔥 WEBHOOK HIT — TYPE:", event.type);
+
+    // 3) Handle the payment confirmation
+    if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+        try {
+            await createOrderFromSession(session);
+        } catch (err) {
+            // Log but don't crash — always respond 200 so Stripe doesn't spam retries
+            console.error("createOrderFromSession failed:", err.message);
+        }
+    }
+
+    // 4) Always respond 200
+    res.status(200).json({ received: true });
+});
+
+// ==================== Helper ====================
+
+// @desc    Convert a completed Stripe session into an Order (atomic + idempotent)
+// @access  Internal
+const createOrderFromSession = async (session) => {
+    // 1) Start a transaction — order + stock + cart all succeed or fail together
+    const dbSession = await mongoose.startSession();
+    dbSession.startTransaction();
+
+    try {
+        // 2) Idempotency: skip if this session was already processed
+        const existingOrder = await Order.findOne({
+            stripeSessionId: session.id,
+        }).session(dbSession);
+
+        if (existingOrder) {
+            console.log(`Order already exists for session ${session.id} — skipping`);
+            await dbSession.abortTransaction();
+            return existingOrder;
+        }
+
+        // 3) Extract identifiers
+        const cartId = session.client_reference_id;
+        const userId = session.metadata?.userId;
+
+        if (!cartId || !userId) {
+            throw new Error("Missing cartId or userId in session");
+        }
+
+        // 4) Load the cart (inside the transaction)
+        const cart = await Cart.findById(cartId).session(dbSession);
+        if (!cart) {
+            throw new Error(`Cart not found: ${cartId}`);
+        }
+        if (cart.cartItems.length === 0) {
+            throw new Error("Cart is empty");
+        }
+
+        // 5) Create the order
+        const [order] = await Order.create(
+            [
+                {
+                    user: userId,
+                    cartItems: cart.cartItems,
+                    totalOrderPrice: session.amount_total / 100,
+                    paymentMethodType: "card",
+                    isPaid: true,
+                    paidAt: new Date(),
+                    stripeSessionId: session.id,
+                    shippingAddress: session.metadata?.shippingAddress
+                        ? JSON.parse(session.metadata.shippingAddress)
+                        : undefined,
+                },
+            ],
+            { session: dbSession },
+        );
+
+        // 6) Decrease stock and increase sold
+        for (const item of order.cartItems) {
+            await Product.findByIdAndUpdate(
+                item.product,
+                {
+                    $inc: {
+                        quantity: -item.quantity,
+                        sold: item.quantity,
+                    },
+                },
+                { session: dbSession },
+            );
+        }
+
+        // 7) Delete the cart
+        await Cart.findByIdAndDelete(cartId, { session: dbSession });
+
+        // 8) Commit everything
+        await dbSession.commitTransaction();
+
+        console.log(
+            `✅ Order created for user ${userId} — total: ${order.totalOrderPrice}`,
+        );
+        return order;
+    } catch (err) {
+        // 9) Roll back on any error
+        await dbSession.abortTransaction();
+        console.error("createOrderFromSession failed:", err.message);
+        throw err;
+    } finally {
+        // 10) Always end the session
+        dbSession.endSession();
+    }
+};

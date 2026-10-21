@@ -19,7 +19,7 @@ const {
     getSpecificReview,
     updateReview,
     deleteReview,
-    createfillterobject,
+    createFilterObject,
     setProductIdAndUserIdToBody,
 } = require("../controllers/reviewController.js");
 
@@ -36,7 +36,7 @@ router
         createReviewValidator,
         createReview,
     )
-    .get(createfillterobject, getReviews);
+    .get(createFilterObject, getReviews);
 
 // GET    /:id → get a specific review (public)
 // PUT    /:id → update a review (owner)
