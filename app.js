@@ -3,6 +3,7 @@ const path = require("path");
 const cors = require("cors");
 const morgan = require("morgan");
 const compression = require("compression");
+const helmet = require("helmet");
 
 // middleware
 const globalError = require("./Middleware/errorMidleware.js");
@@ -25,7 +26,8 @@ const app = express();
 
 // ================= Middleware =================
 app.use("/api/v1/orders/webhook", express.raw({ type: "application/json" }));
-app.use(express.json());
+//security
+app.use(express.json({ limit: "20kb" }));
 
 app.use(compression());
 
@@ -45,6 +47,28 @@ app.use(
 );
 
 app.set("query parser", "extended");
+
+app.use((req, res, next) => {
+    const query = req.query;
+
+    // Parameters allowed to have multiple values
+    const allowedDuplicates = ["brand", "ratingsAverage", "sold", "ratingsQuantity", "quantity", "category"];
+
+    for (const [key, value] of Object.entries(query)) {
+        if (Array.isArray(value) && !allowedDuplicates.includes(key)) {
+            return next(
+                new ApiError(
+                    `Duplicate query parameter is not allowed: ${key}`,
+                    400
+                )
+            );
+        }
+    }
+
+    next();
+});
+
+app.use(helmet());
 
 // ================= Routes =================
 app.use("/api/v1/categories", categoryRoute);

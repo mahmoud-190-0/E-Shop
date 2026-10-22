@@ -28,7 +28,7 @@ router.post("/signup", signupValidator, signup);
 
 // POST /auth/login          → log in an existing user (with validation)
 router.post("/login",
-  // authLimiter,
+  authLimiter,
   loginValidator, login);
 
 // POST /auth/forgotPassword → request a password reset code by email

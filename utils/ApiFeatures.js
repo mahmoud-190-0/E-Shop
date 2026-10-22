@@ -1,20 +1,104 @@
+const ApiError = require("./ApiError");
+const mongoose = require("mongoose");
+
+const escapeRegex = (value) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 class ApiFeatures {
   constructor(mongooseQuery, queryString) {
     this.mongooseQuery = mongooseQuery;
     this.queryString = queryString;
   }
 
-  filter() {
-    const queryStringObj = { ...this.queryString };
-    const excludesFields = ["page", "sort", "limit", "fields", "keyword"];
-    excludesFields.forEach((field) => delete queryStringObj[field]);
-    // Apply filtration using [gte, gt, lte, lt]
-    let queryStr = JSON.stringify(queryStringObj);
-    queryStr = queryStr.replace(/\b(gte|gt|lte|lt)\b/g, (match) => `$${match}`);
 
-    this.mongooseQuery = this.mongooseQuery.find(JSON.parse(queryStr));
+  filter() {
+    const allowedFields = [
+      "price",
+      "priceAfterDiscount",
+      "ratingsAverage",
+      "category",
+      "brand",
+    ];
+
+    const allowedOperators = ["gte", "gt", "lte", "lt"];
+    const filters = {};
+
+    for (const [field, value] of Object.entries(this.queryString)) {
+      // تجاهل الحقول الخاصة بالبحث والترتيب والصفحات
+      if (
+        ["page", "sort", "limit", "fields", "keyword"].includes(field)
+      ) {
+        continue;
+      }
+
+      // ارفض أي حقل غير مسموح
+      if (!allowedFields.includes(field)) {
+        throw new ApiError(`Filtering by '${field}' is not allowed`, 400);
+      }
+
+      // امنع Arrays و Objects غير المتوقعة
+      if (value === null || Array.isArray(value)) {
+        throw new ApiError(`Invalid value for '${field}'`, 400);
+      }
+
+      // حقول السعر والتقييم لازم تكون أرقام
+      if (
+        ["price", "priceAfterDiscount", "ratingsAverage"].includes(field)
+      ) {
+        const conditions = {};
+
+        if (typeof value === "object") {
+          for (const [operator, rawValue] of Object.entries(value)) {
+            if (!allowedOperators.includes(operator)) {
+              throw new ApiError("Invalid filter operator", 400);
+            }
+
+            if (
+              typeof rawValue !== "string" ||
+              rawValue.trim() === "" ||
+              !Number.isFinite(Number(rawValue))
+            ) {
+              throw new ApiError("Filter value must be numeric", 400);
+            }
+
+            conditions[`$${operator}`] = Number(rawValue);
+          }
+
+          if (Object.keys(conditions).length === 0) {
+            throw new ApiError("Empty filter conditions", 400);
+          }
+
+          filters[field] = conditions;
+        } else {
+          if (
+            typeof value !== "string" ||
+            value.trim() === "" ||
+            !Number.isFinite(Number(value))
+          ) {
+            throw new ApiError("Filter value must be numeric", 400);
+          }
+
+          filters[field] = Number(value);
+        }
+
+        continue;
+      }
+
+      // category و brand لازم يكونوا MongoDB ObjectId صحيح
+      if (
+        typeof value !== "string" ||
+        !mongoose.isValidObjectId(value)
+      ) {
+        throw new ApiError(`Invalid ID for '${field}'`, 400);
+      }
+
+      filters[field] = value;
+    }
+
+    this.mongooseQuery = this.mongooseQuery.find(filters);
     return this;
   }
+
 
   sort() {
     if (this.queryString.sort) {
@@ -38,20 +122,35 @@ class ApiFeatures {
 
   //search
   search(modelName) {
-    if (this.queryString.keyword) {
-      const keyword = this.queryString.keyword;
+    const rawKeyword = this.queryString.keyword;
+
+    if (rawKeyword !== undefined) {
+      // Validate the input type
+      if (
+        typeof rawKeyword !== "string" ||
+        rawKeyword.trim().length === 0 ||
+        rawKeyword.length > 100
+      ) {
+        throw new Error("Invalid search keyword");
+      }
+
+      // Sanitize the keyword
+      const keyword = escapeRegex(rawKeyword.trim());
+
       const regex = { $regex: keyword, $options: "i" };
 
       let query;
 
       if (modelName === "Product") {
         query = {
-          $or: [{ title: regex }, { description: regex }, { colors: regex }],
+          $or: [
+            { title: regex },
+            { description: regex },
+            { colors: regex },
+          ],
         };
       } else {
-        query = {
-          name: regex,
-        };
+        query = { name: regex };
       }
 
       this.mongooseQuery = this.mongooseQuery.find(query);

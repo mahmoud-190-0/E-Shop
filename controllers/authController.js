@@ -8,7 +8,7 @@ const ApiError = require("../utils/ApiError");
 const sendEmail = require("../utils/sendEmail");
 const User = require("../models/userModel");
 const { generateToken } = require("../utils/jwtToken");
-
+const { sanitizeUser } = require("../utils/sanitizeData");
 // ==================== Auth Controllers ====================
 
 // @desc    Sign up a new user
@@ -28,9 +28,11 @@ exports.signup = asyncHandler(async (req, res, next) => {
     const token = generateToken(user._id);
 
     // 3) Respond with token and user data
-    res.status(201).json({
+    const safeUser = sanitizeUser(user);
+
+    res.status(200).json({
         status: "success",
-        data: user,
+        data: safeUser,
         token,
     });
 });
@@ -59,9 +61,11 @@ exports.login = asyncHandler(async (req, res, next) => {
 
     // 5) Respond with token and user data (hide password)
     user.password = undefined;
+    const safeUser = sanitizeUser(user);
+
     res.status(200).json({
         status: "success",
-        data: user,
+        data: safeUser,
         token,
     });
 });
