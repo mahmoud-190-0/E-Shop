@@ -22,7 +22,7 @@ const adminOrManager = allowedTo("admin", "manager");
 // ==================== Routes ====================
 
 // GET /checkout-session/:cartId → create a Stripe checkout session (user only)
-router.get(
+router.post(
     "/checkout-session/:cartId",
     protect,
     userOnly,

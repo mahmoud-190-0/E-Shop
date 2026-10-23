@@ -6,6 +6,7 @@ const ApiError = require("../utils/ApiError");
 const Cart = require("../models/cartModel");
 const Order = require("../models/orderModel");
 const Product = require("../models/productModel");
+const User = require("../models/userModel");
 
 // @desc    Create a cash order
 // @route   POST /api/v1/orders
@@ -210,49 +211,6 @@ exports.updateOrderStatus = asyncHandler(async (req, res, next) => {
     });
 });
 
-// @desc    Cancel an order by the user
-// @route   PUT /api/v1/orders/:id/cancel
-// @access  Private (user only)
-exports.cancelOrderByUser = asyncHandler(async (req, res, next) => {
-    // 1) Find the order by id.
-    const order = await Order.findById(req.params.id);
-    if (!order) {
-        return next(new ApiError("Order not found", 404));
-    }
-
-    // 2) Ensure the user owns this order.
-    if (order.user.toString() !== req.user._id.toString()) {
-        return next(new ApiError("Not authorized", 403));
-    }
-
-    // 3) Only pending orders can be cancelled by the user.
-    if (order.status !== "pending") {
-        return next(new ApiError("Order cannot be cancelled now", 400));
-    }
-
-    // 4) Mark the order as cancelled.
-    order.status = "cancelled";
-
-    // 5) Roll back product stock (restore quantity, decrement sold).
-    for (const item of order.cartItems) {
-        await Product.findByIdAndUpdate(item.product, {
-            $inc: {
-                quantity: item.quantity,
-                sold: -item.quantity,
-            },
-        });
-    }
-
-    // 6) Persist and respond.
-    await order.save();
-
-    res.status(200).json({
-        status: "success",
-        message: "Order cancelled successfully",
-        data: order,
-    });
-});
-
 // @desc    Cancel an order by the user (atomic: status + stock rollback)
 // @route   PUT /api/v1/orders/:id/cancel
 // @access  Private (user only)
@@ -311,8 +269,10 @@ exports.cancelOrderByUser = asyncHandler(async (req, res, next) => {
             data: order,
         });
     } catch (err) {
-        // 10) Roll back on any error.
-        await session.abortTransaction();
+        // 10) Roll back on any error (only if still in a transaction).
+        if (session.inTransaction()) {
+            await session.abortTransaction();
+        }
         next(err);
     } finally {
         // 11) Always end the session.
@@ -334,84 +294,51 @@ exports.createCheckoutSession = asyncHandler(async (req, res, next) => {
         return next(new ApiError("Cart is empty", 400));
     }
 
-    // 3) Compute the price to charge.
+    // 3) Get the shipping address from the request body.
+    //    Format: { street, city, postalCode, country, phone }
+    const shippingAddress = req.body?.shippingAddress; if (!shippingAddress) {
+        return next(new ApiError("Shipping address is required", 400));
+    }
+
+    // 4) Compute the price to charge.
     //    Prefer the discounted total when a coupon was applied.
     const cartPrice = cart.totalPriceAfterDiscount || cart.totalPrice;
     const totalPrice = cartPrice + taxPrice + shippingPrice;
-    const finalPrice = Math.floor(totalPrice);
 
-    // 4) Stripe expects the smallest currency unit (piasters for EGP).
-    const amount = Math.round(finalPrice * 100);
+    // 5) Stripe expects the smallest currency unit (piasters for EGP).
+    const amount = Math.round(totalPrice * 100);
+    if (amount <= 0) return next(new ApiError("Invalid order total", 400));
 
-    // 5) Create the Stripe checkout session.
+    // 6) Create the Stripe checkout session.
     const session = await stripe.checkout.sessions.create({
         line_items: [
             {
                 price_data: {
                     currency: "egp",
-                    product_data: {
-                        name: "Cart Checkout",
-                    },
+                    product_data: { name: `Order for ${req.user.name}` },
                     unit_amount: amount,
                 },
                 quantity: 1,
             },
         ],
         mode: "payment",
-        success_url: `${req.protocol}://${req.get("host")}/orders`,
+        success_url: `${req.protocol}://${req.get("host")}/orders?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${req.protocol}://${req.get("host")}/cart`,
         customer_email: req.user.email,
-        // ✅ Use the ACTUAL cart._id, not req.params.cartId (which may be undefined)
+        // Use the ACTUAL cart._id, not req.params.cartId (which may be undefined).
         client_reference_id: cart._id.toString(),
         metadata: {
             userId: req.user._id.toString(),
-            // cartId: cart._id.toString(), // ← redundant if using client_reference_id
-            // shippingAddress: JSON.stringify(req.body.shippingAddress),
+            // Stripe metadata values must be strings, so serialize the address.
+            shippingAddress: JSON.stringify(shippingAddress),
         },
     });
 
-    // 6) Respond with the session.
+    // 7) Respond with the session.
     res.status(200).json({
         status: "success",
         session,
     });
-});
-
-// @desc    Handle Stripe webhook for payment confirmation
-// @route   POST /api/v1/orders/webhook
-// @access  Public (Stripe calls this endpoint)
-exports.webhookCheckout = asyncHandler(async (req, res, next) => {
-    // 1) Get the signature from the Stripe header
-    const sig = req.headers["stripe-signature"];
-
-    // 2) Verify the event came from Stripe
-    let event;
-    try {
-        event = stripe.webhooks.constructEvent(
-            req.body,
-            sig,
-            process.env.STRIPE_WEBHOOK_SECRET,
-        );
-    } catch (err) {
-        console.log("❌ WEBHOOK ERROR:", err.message);
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    console.log("🔥 WEBHOOK HIT — TYPE:", event.type);
-
-    // 3) Handle the payment confirmation
-    if (event.type === "checkout.session.completed") {
-        const session = event.data.object;
-        try {
-            await createOrderFromSession(session);
-        } catch (err) {
-            // Log but don't crash — always respond 200 so Stripe doesn't spam retries
-            console.error("createOrderFromSession failed:", err.message);
-        }
-    }
-
-    // 4) Always respond 200
-    res.status(200).json({ received: true });
 });
 
 // ==================== Helper ====================
@@ -419,89 +346,93 @@ exports.webhookCheckout = asyncHandler(async (req, res, next) => {
 // @desc    Convert a completed Stripe session into an Order (atomic + idempotent)
 // @access  Internal
 const createOrderFromSession = async (session) => {
-    // 1) Start a transaction — order + stock + cart all succeed or fail together
-    const dbSession = await mongoose.startSession();
-    dbSession.startTransaction();
+    // 1) Idempotency guard — Stripe may deliver the same event multiple times.
+    const existingOrder = await Order.findOne({ stripeSessionId: session.id });
+    if (existingOrder) return existingOrder;
+
+    // 2) Load the cart. If it's gone, the order was already processed.
+    const cart = await Cart.findById(session.client_reference_id);
+    if (!cart || cart.cartItems.length === 0) return null;
+
+    // 3) Load the user.
+    const user = await User.findOne({ email: session.customer_email });
+    if (!user) throw new Error(`No user found for ${session.customer_email}`);
+
+    // 4) Parse the shipping address (Stripe metadata values are strings).
+    let shippingAddress;
+    try {
+        shippingAddress = session.metadata?.shippingAddress
+            ? JSON.parse(session.metadata.shippingAddress)
+            : undefined;
+    } catch {
+        throw new Error("Invalid shippingAddress in Stripe metadata");
+    }
+
+    const orderPrice = session.amount_total / 100;
+
+    // 5) Create the order.
+    const order = await Order.create({
+        user: user._id,
+        cartItems: cart.cartItems,
+        shippingAddress,
+        totalOrderPrice: orderPrice,
+        totalPriceAfterDiscount: orderPrice,
+        isPaid: true,
+        paidAt: Date.now(),
+        paymentMethodType: "card",
+        stripeSessionId: session.id, // required for idempotency
+    });
+
+    // 6) Decrement stock atomically (with a guard so we never go negative).
+    const bulkOption = cart.cartItems.map((item) => ({
+        updateOne: {
+            filter: { _id: item.product, quantity: { $gte: item.quantity } },
+            update: {
+                $inc: { quantity: -item.quantity, sold: item.quantity },
+            },
+        },
+    }));
+    const bulkResult = await Product.bulkWrite(bulkOption);
+    if (bulkResult.modifiedCount !== cart.cartItems.length) {
+        // Some product didn't have enough stock — roll back the order.
+        await Order.findByIdAndDelete(order._id);
+        throw new Error("Insufficient stock for one or more items");
+    }
+
+    // 7) Clear the cart.
+    await Cart.findByIdAndDelete(cart._id);
+
+    return order;
+};
+
+// @desc    Handle Stripe webhook for payment confirmation
+// @route   POST /api/v1/orders/webhook
+// @access  Public (Stripe calls this endpoint)
+exports.webhookCheckout = asyncHandler(async (req, res, next) => {
+    const sig = req.headers["stripe-signature"];
+
+    let event;
 
     try {
-        // 2) Idempotency: skip if this session was already processed
-        const existingOrder = await Order.findOne({
-            stripeSessionId: session.id,
-        }).session(dbSession);
-
-        if (existingOrder) {
-            console.log(`Order already exists for session ${session.id} — skipping`);
-            await dbSession.abortTransaction();
-            return existingOrder;
-        }
-
-        // 3) Extract identifiers
-        const cartId = session.client_reference_id;
-        const userId = session.metadata?.userId;
-
-        if (!cartId || !userId) {
-            throw new Error("Missing cartId or userId in session");
-        }
-
-        // 4) Load the cart (inside the transaction)
-        const cart = await Cart.findById(cartId).session(dbSession);
-        if (!cart) {
-            throw new Error(`Cart not found: ${cartId}`);
-        }
-        if (cart.cartItems.length === 0) {
-            throw new Error("Cart is empty");
-        }
-
-        // 5) Create the order
-        const [order] = await Order.create(
-            [
-                {
-                    user: userId,
-                    cartItems: cart.cartItems,
-                    totalOrderPrice: session.amount_total / 100,
-                    paymentMethodType: "card",
-                    isPaid: true,
-                    paidAt: new Date(),
-                    stripeSessionId: session.id,
-                    shippingAddress: session.metadata?.shippingAddress
-                        ? JSON.parse(session.metadata.shippingAddress)
-                        : undefined,
-                },
-            ],
-            { session: dbSession },
+        event = stripe.webhooks.constructEvent(
+            req.body,
+            sig,
+            process.env.STRIPE_WEBHOOK_SECRET,
         );
-
-        // 6) Decrease stock and increase sold
-        for (const item of order.cartItems) {
-            await Product.findByIdAndUpdate(
-                item.product,
-                {
-                    $inc: {
-                        quantity: -item.quantity,
-                        sold: item.quantity,
-                    },
-                },
-                { session: dbSession },
-            );
-        }
-
-        // 7) Delete the cart
-        await Cart.findByIdAndDelete(cartId, { session: dbSession });
-
-        // 8) Commit everything
-        await dbSession.commitTransaction();
-
-        console.log(
-            `✅ Order created for user ${userId} — total: ${order.totalOrderPrice}`,
-        );
-        return order;
     } catch (err) {
-        // 9) Roll back on any error
-        await dbSession.abortTransaction();
-        console.error("createOrderFromSession failed:", err.message);
-        throw err;
-    } finally {
-        // 10) Always end the session
-        dbSession.endSession();
+        return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-};
+
+    try {
+        if (event.type === "checkout.session.completed") {
+            // Create the order (awaited so errors are caught below).
+            await createOrderFromSession(event.data.object);
+        }
+
+        res.status(200).json({ received: true });
+    } catch (err) {
+        // Return 500 so Stripe retries on transient failures.
+        console.error("Webhook processing failed:", err);
+        res.status(500).json({ received: false, error: err.message });
+    }
+});
