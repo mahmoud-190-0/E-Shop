@@ -63,7 +63,10 @@ exports.updateCategory = factory.updateOne(category);
 // @route   DELETE /api/v1/categories/:id
 // @access  Private (admin, manager)
 exports.deleteCategory = factory.deleteOne(category);
-// categoryController.js
+
+// @desc    Get a specific category by id
+// @route   GET /api/v1/categories/stats
+// @access  Private (admin, manager)
 exports.getCategoryStats = asyncHandler(async (req, res) => {
   const Product = require("../models/productModel");
   const SubCategory = require("../models/subCategoryModel");

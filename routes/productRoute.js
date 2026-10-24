@@ -18,7 +18,8 @@ const {
   updateProduct,
   deleteProduct,
   uploadProductImage,
-  resizeProductImage, setSubcategoryIdToBody, createFilterObject
+  resizeProductImage, setSubcategoryIdToBody, createFilterObject,
+  getProductStats
 } = require("../controllers/productController.js");
 
 const adminOnly = [
@@ -40,6 +41,7 @@ router.use("/:productId/reviews", reviewRouter);
 
 // ==================== Routes ====================
 
+router.get("/stats", adminOnly, getProductStats);
 router
   .route("/")
   .post(

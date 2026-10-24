@@ -9,6 +9,7 @@ const {
     updateCoupon,
     deleteCoupon,
     getSpecificCoupon,
+    getCouponStats,
 } = require("../controllers/couponController");
 
 const {
@@ -29,7 +30,7 @@ router
     .route("/")
     .post(createCouponValidator, createCoupon)
     .get(getAllCoupons);
-
+router.get("/stats", getCouponStats);
 // GET    /coupons/:id → get a specific coupon (admin only)
 // PUT    /coupons/:id → update a coupon (admin only)
 // DELETE /coupons/:id → delete a coupon (admin only)

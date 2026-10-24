@@ -102,3 +102,54 @@ exports.getSpecificCoupon = asyncHandler(async (req, res, next) => {
         data: coupon,
     });
 });
+
+// @desc    Get coupon statistics
+// @route   GET /api/v1/coupons/stats
+// @access  Private (admin, manager)
+exports.getCouponStats = asyncHandler(async (req, res, next) => {
+    const now = new Date();
+
+    // 1) Fetch all coupons in one query (small dataset, cheap)
+    const coupons = await Coupon.find().select(
+        "active expire usageLimit usedCount discount discountType"
+    );
+
+    // 2) Compute stats client-side from the loaded docs
+    const total = coupons.length;
+    const active = coupons.filter(
+        (c) =>
+            c.active &&
+            (!c.expire || new Date(c.expire) > now) &&
+            (c.usageLimit === 0 || c.usedCount < c.usageLimit)
+    ).length;
+
+    const expired = coupons.filter(
+        (c) => c.expire && new Date(c.expire) <= now
+    ).length;
+
+    const exhausted = coupons.filter(
+        (c) =>
+            c.usageLimit > 0 &&
+            c.usedCount >= c.usageLimit &&
+            (!c.expire || new Date(c.expire) > now)
+    ).length;
+
+    const inactive = coupons.filter((c) => !c.active).length;
+
+    const totalRedemptions = coupons.reduce(
+        (sum, c) => sum + (c.usedCount || 0),
+        0
+    );
+
+    res.status(200).json({
+        status: "success",
+        data: {
+            total,
+            active,
+            expired,
+            exhausted,
+            inactive,
+            totalRedemptions,
+        },
+    });
+});

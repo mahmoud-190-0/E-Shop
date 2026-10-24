@@ -117,3 +117,69 @@ exports.updateProduct = factory.updateOne(Product);
 // @route   DELETE /api/v1/products/:id
 // @access  Private (admin, manager)
 exports.deleteProduct = factory.deleteOne(Product);
+
+// @desc    Get product statistics
+// @route   GET /api/v1/products/stats
+// @access  Private (admin, manager)
+exports.getProductStats = asyncHandler(async (req, res, next) => {
+    // Threshold for "low stock" — adjust here if your business rules differ
+    const LOW_STOCK_THRESHOLD = 5;
+
+    const [
+        total,
+        outOfStock,
+        lowStock,
+        inStock,
+        withDiscount,
+        avgRatingResult,
+        totalSoldResult,
+    ] = await Promise.all([
+        // Total products
+        Product.countDocuments(),
+
+        // Out of stock
+        Product.countDocuments({ quantity: 0 }),
+
+        // Low stock (0 < quantity < threshold)
+        Product.countDocuments({
+            quantity: { $gt: 0, $lt: LOW_STOCK_THRESHOLD },
+        }),
+
+        // In stock (>= threshold)
+        Product.countDocuments({ quantity: { $gte: LOW_STOCK_THRESHOLD } }),
+
+        // Products currently on discount
+        Product.countDocuments({
+            priceAfterDiscount: { $gt: 0, $exists: true },
+        }),
+
+        // Average rating across all rated products
+        Product.aggregate([
+            { $match: { ratingsQuantity: { $gt: 0 } } },
+            { $group: { _id: null, avg: { $avg: "$ratingsAverage" } } },
+        ]),
+
+        // Total units sold across the store
+        Product.aggregate([
+            { $group: { _id: null, totalSold: { $sum: "$sold" } } },
+        ]),
+    ]);
+
+    res.status(200).json({
+        status: "success",
+        data: {
+            total,
+            inStock,
+            outOfStock,
+            lowStock,
+            withDiscount,
+            lowStockThreshold: LOW_STOCK_THRESHOLD,
+            averageRating:
+                avgRatingResult.length > 0
+                    ? Math.round(avgRatingResult[0].avg * 10) / 10
+                    : 0,
+            totalSold:
+                totalSoldResult.length > 0 ? totalSoldResult[0].totalSold : 0,
+        },
+    });
+});
