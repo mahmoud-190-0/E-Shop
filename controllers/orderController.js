@@ -8,12 +8,43 @@ const Order = require("../models/orderModel");
 const Product = require("../models/productModel");
 const User = require("../models/userModel");
 
+
+// @desc    Get dashboard stats (total orders + revenue)
+// @route   GET /api/v1/orders/stats
+// @access  Private (admin, manager)
+exports.getOrderStats = asyncHandler(async (req, res) => {
+    const agg = await Order.aggregate([
+        // exclude cancelled orders from revenue
+        { $match: { status: { $ne: "cancelled" } } },
+        {
+            $group: {
+                _id: null,
+                total: { $sum: 1 },
+                revenue: {
+                    $sum: {
+                        $ifNull: ["$totalPriceAfterDiscount", "$totalOrderPrice"],
+                    },
+                },
+            },
+        },
+    ]);
+
+    const { total = 0, revenue = 0 } = agg[0] || {};
+
+    res.status(200).json({
+        status: "success",
+        data: { total, revenue: Math.floor(revenue) },
+    });
+});
 // @desc    Create a cash order
 // @route   POST /api/v1/orders
 // @access  Private (user only)
 exports.createCashOrder = asyncHandler(async (req, res, next) => {
-    // 1) Get the user's cart.
-    const cart = await Cart.findOne({ user: req.user._id });
+    // 1) Get the user's cart, with products populated so we can snapshot them.
+    const cart = await Cart.findOne({ user: req.user._id }).populate(
+        "cartItems.product",
+        "title imageCover price quantity",
+    );
     if (!cart) {
         return next(new ApiError("Cart not found", 404));
     }
@@ -23,25 +54,52 @@ exports.createCashOrder = asyncHandler(async (req, res, next) => {
         return next(new ApiError("Cart is empty", 400));
     }
 
-    // 3) Build the pricing structure.
+    // 3) Validate stock and build snapshot items (do this BEFORE creating the order).
+    const cartItems = cart.cartItems.map((item) => {
+        const product = item.product;
+
+        if (!product) {
+            // Product was deleted while in cart
+            throw new ApiError(
+                `A product in your cart no longer exists. Please remove it and try again.`,
+                400,
+            );
+        }
+
+        if (product.quantity < item.quantity) {
+            throw new ApiError(
+                `Only ${product.quantity} left in stock for "${product.title}"`,
+                400,
+            );
+        }
+
+        return {
+            product: product._id,
+            name: product.title,
+            image: product.imageCover,
+            quantity: item.quantity,
+            price: item.price,
+        };
+    });
+
+    // 4) Build the pricing structure.
     const itemsPrice = cart.totalPrice;
     const discount = cart.discountValue || 0;
     const shippingPrice = 0;
     const totalOrderPrice = itemsPrice + shippingPrice;
     const totalPriceAfterDiscount = Math.floor(totalOrderPrice - discount);
 
-    // 4) Create the order.
+    // 5) Create the order with snapshot items.
     const order = await Order.create({
         user: req.user._id,
-        cartItems: cart.cartItems,
+        cartItems,
         totalOrderPrice,
         totalPriceAfterDiscount,
         paymentMethodType: "cash",
-        isPaid: false,
     });
 
-    // 5) Decrease product stock and increase sold counter.
-    for (const item of order.cartItems) {
+    // 6) Decrease product stock and increase sold counter.
+    for (const item of cartItems) {
         await Product.findByIdAndUpdate(item.product, {
             $inc: {
                 quantity: -item.quantity,
@@ -50,7 +108,7 @@ exports.createCashOrder = asyncHandler(async (req, res, next) => {
         });
     }
 
-    // 6) Clear the cart after a successful order.
+    // 7) Clear the cart after a successful order.
     cart.cartItems = [];
     cart.totalPrice = 0;
     cart.discountValue = 0;
@@ -58,43 +116,36 @@ exports.createCashOrder = asyncHandler(async (req, res, next) => {
     cart.totalPriceAfterDiscount = 0;
     await cart.save();
 
-    // 7) Respond with the created order.
+    // 8) Respond with the created order.
     res.status(201).json({
         status: "success",
         message: "Cash order created successfully",
         data: order,
     });
 });
-
 // @desc    Get all orders (admin sees all, user sees only theirs)
 // @route   GET /api/v1/orders
 // @access  Private (admin and user)
 exports.getOrders = asyncHandler(async (req, res, next) => {
-    // 1) Build the filter based on role:
-    //    - regular users only see their own orders.
-    //    - admins see all orders.
     let filter = {};
     if (req.user.role === "user") {
         filter = { user: req.user._id };
     }
 
-    // 2) Parse pagination params with sane defaults.
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.max(1, parseInt(req.query.limit) || 10);
     const skip = (page - 1) * limit;
 
-    // 3) Fetch paginated orders and total count in parallel.
     const [orders, total] = await Promise.all([
         Order.find(filter)
             .populate("user", "name email")
-            .populate("cartItems.product", "title price")
+            .populate("cartItems.product", "title price imageCover") // ← add imageCover
             .sort("-createdAt")
             .skip(skip)
             .limit(limit),
         Order.countDocuments(filter),
     ]);
 
-    // 4) Respond with results and pagination metadata.
     res.status(200).json({
         status: "success",
         results: orders.length,
@@ -111,7 +162,7 @@ exports.getSpecificOrder = asyncHandler(async (req, res, next) => {
     // 1) Fetch the order and populate related fields.
     const order = await Order.findById(req.params.id)
         .populate("user", "name email")
-        .populate("cartItems.product", "title price image");
+        .populate("cartItems.product", "title price imageCover");
 
     // 2) Handle the case where the order does not exist.
     if (!order) {
@@ -350,15 +401,18 @@ const createOrderFromSession = async (session) => {
     const existingOrder = await Order.findOne({ stripeSessionId: session.id });
     if (existingOrder) return existingOrder;
 
-    // 2) Load the cart. If it's gone, the order was already processed.
-    const cart = await Cart.findById(session.client_reference_id);
+    // 2) Load the cart, populated so we can snapshot products.
+    const cart = await Cart.findById(session.client_reference_id).populate(
+        "cartItems.product",
+        "title imageCover",
+    );
     if (!cart || cart.cartItems.length === 0) return null;
 
     // 3) Load the user.
     const user = await User.findOne({ email: session.customer_email });
     if (!user) throw new Error(`No user found for ${session.customer_email}`);
 
-    // 4) Parse the shipping address (Stripe metadata values are strings).
+    // 4) Parse the shipping address.
     let shippingAddress;
     try {
         shippingAddress = session.metadata?.shippingAddress
@@ -370,21 +424,35 @@ const createOrderFromSession = async (session) => {
 
     const orderPrice = session.amount_total / 100;
 
-    // 5) Create the order.
+    // 5) Build snapshot items — filter out deleted products.
+    const cartItems = cart.cartItems
+        .filter((item) => item.product) // product still exists
+        .map((item) => ({
+            product: item.product._id,
+            name: item.product.title,
+            image: item.product.imageCover,
+            quantity: item.quantity,
+            price: item.price,
+        }));
+
+    if (cartItems.length === 0) {
+        throw new Error("All products in cart were removed");
+    }
+
+    // 6) Create the order.
     const order = await Order.create({
         user: user._id,
-        cartItems: cart.cartItems,
+        cartItems,
         shippingAddress,
         totalOrderPrice: orderPrice,
         totalPriceAfterDiscount: orderPrice,
-        isPaid: true,
         paidAt: Date.now(),
         paymentMethodType: "card",
-        stripeSessionId: session.id, // required for idempotency
+        stripeSessionId: session.id,
     });
 
-    // 6) Decrement stock atomically (with a guard so we never go negative).
-    const bulkOption = cart.cartItems.map((item) => ({
+    // 7) Decrement stock atomically with a guard.
+    const bulkOption = cartItems.map((item) => ({
         updateOne: {
             filter: { _id: item.product, quantity: { $gte: item.quantity } },
             update: {
@@ -393,13 +461,12 @@ const createOrderFromSession = async (session) => {
         },
     }));
     const bulkResult = await Product.bulkWrite(bulkOption);
-    if (bulkResult.modifiedCount !== cart.cartItems.length) {
-        // Some product didn't have enough stock — roll back the order.
+    if (bulkResult.modifiedCount !== cartItems.length) {
         await Order.findByIdAndDelete(order._id);
         throw new Error("Insufficient stock for one or more items");
     }
 
-    // 7) Clear the cart.
+    // 8) Clear the cart.
     await Cart.findByIdAndDelete(cart._id);
 
     return order;

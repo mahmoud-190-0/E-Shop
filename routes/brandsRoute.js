@@ -21,6 +21,7 @@ const {
   deleteBrand,
   uploadBrandImage,
   resizeBrandImage,
+  getBrandStats,
 } = require("../controllers/brandController.js");
 
 // ==================== Routes ====================
@@ -38,7 +39,12 @@ router
     createBrand,
   )
   .get(getBrand);
-
+router.get(
+  "/stats",
+  authController.protect,
+  authController.allowedTo("admin", "manager"),
+  getBrandStats,
+);
 // GET    /brands/:id  → get a specific brand by id (public)
 // PUT    /brands/:id  → update a brand (admin + manager, with image upload)
 // DELETE /brands/:id  → delete a brand (admin + manager)

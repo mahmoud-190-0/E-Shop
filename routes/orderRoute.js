@@ -10,6 +10,7 @@ const {
     updateOrderStatus,
     cancelOrderByUser,
     createCheckoutSession,
+    getOrderStats,
 } = require("../controllers/orderController.js");
 
 // Auth & Middleware
@@ -27,6 +28,12 @@ router.post(
     protect,
     userOnly,
     createCheckoutSession,
+);
+router.get(
+    "/stats",
+    protect,
+    allowedTo("admin", "manager"),
+    getOrderStats,
 );
 
 // POST / → user creates a cash order

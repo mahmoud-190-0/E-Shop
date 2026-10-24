@@ -19,6 +19,7 @@ const {
   deleteCategory,
   uploadCategoryImage,
   resizeCategoryImage,
+  getCategoryStats,
 } = require("../controllers/categoryController.js");
 
 // Nested subcategories router
@@ -32,6 +33,13 @@ const router = express.Router();
 router.use("/:categoryId/subcategories", subcategoriesRouter);
 
 // ==================== Routes ====================
+// categoryRoute.js
+router.get(
+  "/stats",
+  authController.protect,
+  authController.allowedTo("admin", "manager"),
+  getCategoryStats
+);
 
 // POST /categories → create a new category (admin + manager, with image upload)
 // GET  /categories → list all categories (public)

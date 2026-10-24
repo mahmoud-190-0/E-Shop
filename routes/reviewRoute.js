@@ -21,6 +21,8 @@ const {
     deleteReview,
     createFilterObject,
     setProductIdAndUserIdToBody,
+    getAllReviewsAdmin,
+    getReviewStats,
 } = require("../controllers/reviewController.js");
 
 // ==================== Routes ====================
@@ -38,6 +40,19 @@ router
     )
     .get(createFilterObject, getReviews);
 
+router.get(
+    "/admin",
+    authController.protect,
+    authController.allowedTo("admin", "manager"),
+    getAllReviewsAdmin
+);
+
+router.get(
+    "/stats",
+    authController.protect,
+    authController.allowedTo("admin", "manager"),
+    getReviewStats
+);
 // GET    /:id → get a specific review (public)
 // PUT    /:id → update a review (owner)
 // DELETE /:id → delete a review (admin, manager, or owner)

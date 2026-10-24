@@ -16,6 +16,11 @@ exports.createBrandValidator = [
       req.body.slug = slugify(val, { lower: true });
       return true;
     }),
+  check("description")
+    .optional()
+    .isLength({ max: 500 })
+    .withMessage("Description cannot exceed 500 characters"),
+
   validatorMiddleware,
 ];
 
@@ -35,6 +40,11 @@ exports.updateBrandValidator = [
       req.body.slug = slugify(val, { lower: true });
       return true;
     }),
+  body("description")
+    .optional()
+    .isLength({ max: 500 })
+    .withMessage("Description cannot exceed 500 characters"),
+
   validatorMiddleware,
 ];
 

@@ -9,6 +9,11 @@ const brandSchema = new mongoose.Schema(
       minlength: [2, "brand must be at least 3 characters."],
       maxlength: [32, "brand must be at most 32 characters."],
     },
+    description: {
+      type: String,
+      maxlength: [500, "Description too long"],
+      trim: true,
+    },
     slug: {
       type: String,
       lowercase: true,
@@ -21,5 +26,14 @@ const brandSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+brandSchema.virtual("productCount", {
+  ref: "Product",
+  localField: "_id",
+  foreignField: "brand",
+  count: true,
+});
+
+brandSchema.set("toJSON", { virtuals: true });
+brandSchema.set("toObject", { virtuals: true });
 //Create model
 module.exports = mongoose.model("Brand", brandSchema);

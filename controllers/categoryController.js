@@ -63,3 +63,27 @@ exports.updateCategory = factory.updateOne(category);
 // @route   DELETE /api/v1/categories/:id
 // @access  Private (admin, manager)
 exports.deleteCategory = factory.deleteOne(category);
+// categoryController.js
+exports.getCategoryStats = asyncHandler(async (req, res) => {
+  const Product = require("../models/productModel");
+  const SubCategory = require("../models/subCategoryModel");
+  const Category = require("../models/categoryModel");
+
+  const [total, catsWithProducts, emptyCats, recent] = await Promise.all([
+    Category.countDocuments(),
+    Product.distinct("category").then((ids) => ids.length),
+    Category.countDocuments().then(async (totalCount) => {
+      const used = await Product.distinct("category");
+      return totalCount - used.length;
+    }),
+    Category.countDocuments({
+      createdAt: { $gte: new Date(Date.now() - 30 * 864e5) },
+    }),
+  ]);
+
+  res.json({
+    status: "success",
+    data: { total, withProducts: catsWithProducts, empty: emptyCats, recent },
+  });
+});
+

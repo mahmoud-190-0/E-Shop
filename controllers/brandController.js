@@ -1,7 +1,9 @@
 const sharp = require("sharp");
 const asyncHandler = require("express-async-handler");
 const factory = require("./factoryHandler");
+
 const Brand = require("../models/brandModel");
+const Product = require("../models/productModel");
 
 const uploadToCloudinary = require("../utils/uploadToCloudinary");
 const { uploadSingleImage } = require("../Middleware/uploadImageMiddleware");
@@ -62,3 +64,25 @@ exports.updateBrand = factory.updateOne(Brand);
 // @route   DELETE /api/v1/brands/:id
 // @access  Private (admin, manager)
 exports.deleteBrand = factory.deleteOne(Brand);
+
+//@desc     Get Brand stats
+//@route    GET /api/v1/brands/stats
+//@access   private(admin, manager)
+exports.getBrandStats = asyncHandler(async (req, res) => {
+    const [total, usedBrandIds] = await Promise.all([
+        Brand.countDocuments(),
+        Product.distinct("brand", { brand: { $ne: null } }),
+    ]);
+
+    const withProducts = usedBrandIds.length;
+    const withoutProducts = total - withProducts;
+
+    const recent = await Brand.countDocuments({
+        createdAt: { $gte: new Date(Date.now() - 30 * 864e5) },
+    });
+
+    res.status(200).json({
+        status: "success",
+        data: { total, withProducts, withoutProducts, recent },
+    });
+});

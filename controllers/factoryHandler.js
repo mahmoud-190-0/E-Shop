@@ -5,8 +5,6 @@ const ApiError = require("../utils/ApiError");
 /* *************************** FACTORY HANDLERS *******************************/
 
 // @desc    Create a new document in the given model
-// @route   Used by createOne routes
-// @access  Depends on the route using it
 exports.createOne = (Model) =>
   asyncHandler(async (req, res) => {
     const document = await Model.create(req.body);
@@ -14,27 +12,24 @@ exports.createOne = (Model) =>
   });
 
 // @desc    Get all documents with filtering, searching, sorting, field limiting, and pagination
-// @route   Used by getAll routes
-// @access  Depends on the route using it
 exports.getAll = (Model, ModelName = ``) =>
   asyncHandler(async (req, res) => {
-    // Build the base filter (allows nested filters like subcategories)
-    const filter = req.filterObj || {};
-    // Count total documents for pagination metadata
+    // 1) Base filter (used for nested routes like /categories/:id/subcategories)
+    const baseFilter = req.filterObj || {};
 
-    const countD = await Model.countDocuments(filter);
+    // 2) Build query + apply filter/search FIRST so `features.filters` gets set
+    const features = new ApiFeatures(Model.find(baseFilter), req.query)
+      .filter()              // ← stores the resolved filters in `this.filters`
+      .search(ModelName);
 
-    // Build the query with all API features chained
-    const features = new ApiFeatures(Model.find(filter), req.query)
-      .filter()
-      .search(ModelName)
-      .sort()
-      .limitFields()
-      .paginate(countD);
+    // 3) Count the FILTERED documents (not the whole collection)
+    const countFilter = { ...baseFilter, ...(features.filters || {}) };
+    const countD = await Model.countDocuments(countFilter);
+
+    // 4) Now apply sort/fields/pagination using the correct count
+    features.sort().limitFields().paginate(countD);
 
     const { mongooseQuery, paginationResult } = features;
-
-    // Execute the final query
     const document = await mongooseQuery;
 
     res
@@ -43,8 +38,6 @@ exports.getAll = (Model, ModelName = ``) =>
   });
 
 // @desc    Get a single document by id
-// @route   Used by getOne routes
-// @access  Depends on the route using it
 exports.getOne = (Model, population) =>
   asyncHandler(async (req, res, next) => {
     const { id } = req.params;
@@ -55,7 +48,6 @@ exports.getOne = (Model, population) =>
     }
     const document = await query;
 
-    // Return error if document not found
     if (!document) {
       return next(new ApiError(`document not found ${req.params.id}`, 404));
     }
@@ -64,8 +56,6 @@ exports.getOne = (Model, population) =>
   });
 
 // @desc    Update a single document by id
-// @route   Used by updateOne routes
-// @access  Depends on the route using it
 exports.updateOne = (Model) =>
   asyncHandler(async (req, res, next) => {
     const { id } = req.params;
@@ -74,7 +64,6 @@ exports.updateOne = (Model) =>
       runValidators: true,
     });
 
-    // Return error if document not found
     if (!document) {
       return next(new ApiError(`document not found ${req.params.id}`, 404));
     }
@@ -83,14 +72,11 @@ exports.updateOne = (Model) =>
   });
 
 // @desc    Delete a single document by id
-// @route   Used by deleteOne routes
-// @access  Depends on the route using it
 exports.deleteOne = (Model) =>
   asyncHandler(async (req, res, next) => {
     const { id } = req.params;
     const document = await Model.findByIdAndDelete(id);
 
-    // Return error if document not found
     if (!document) {
       return next(new ApiError(`document not found ${req.params.id}`, 404));
     }

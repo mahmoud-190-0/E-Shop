@@ -10,64 +10,72 @@ class ApiFeatures {
     this.queryString = queryString;
   }
 
-
   filter() {
-    const allowedFields = [
+    // Numeric fields — support $gte/$gt/$lte/$lt
+    const NUMERIC_FIELDS = [
       "price",
       "priceAfterDiscount",
       "ratingsAverage",
-      "category",
-      "brand",
+      "quantity",
+    ];
+
+    // ObjectId fields — validated as MongoDB ObjectIds
+    const OBJECT_ID_FIELDS = ["category", "brand"];
+
+    // Enum fields — value must be one of the allowed list
+    const ENUM_FIELDS = {
+      role: ["user", "manager", "admin"],
+    };
+
+    // Boolean fields — accept "true" / "false" strings
+    const BOOLEAN_FIELDS = ["active"];
+
+    const allowedFields = [
+      ...NUMERIC_FIELDS,
+      ...OBJECT_ID_FIELDS,
+      ...Object.keys(ENUM_FIELDS),
+      ...BOOLEAN_FIELDS,
     ];
 
     const allowedOperators = ["gte", "gt", "lte", "lt"];
     const filters = {};
 
     for (const [field, value] of Object.entries(this.queryString)) {
-      // تجاهل الحقول الخاصة بالبحث والترتيب والصفحات
-      if (
-        ["page", "sort", "limit", "fields", "keyword"].includes(field)
-      ) {
+      // Skip pagination / sort / fields / search params
+      if (["page", "sort", "limit", "fields", "keyword"].includes(field)) {
         continue;
       }
 
-      // ارفض أي حقل غير مسموح
+      // Reject unknown fields (security: prevent arbitrary queries)
       if (!allowedFields.includes(field)) {
         throw new ApiError(`Filtering by '${field}' is not allowed`, 400);
       }
 
-      // امنع Arrays و Objects غير المتوقعة
+      // Reject null / array values
       if (value === null || Array.isArray(value)) {
         throw new ApiError(`Invalid value for '${field}'`, 400);
       }
 
-      // حقول السعر والتقييم لازم تكون أرقام
-      if (
-        ["price", "priceAfterDiscount", "ratingsAverage"].includes(field)
-      ) {
-        const conditions = {};
-
+      // ── NUMERIC (supports operators like price[gte]=100) ──
+      if (NUMERIC_FIELDS.includes(field)) {
         if (typeof value === "object") {
-          for (const [operator, rawValue] of Object.entries(value)) {
-            if (!allowedOperators.includes(operator)) {
+          const conditions = {};
+          for (const [op, raw] of Object.entries(value)) {
+            if (!allowedOperators.includes(op)) {
               throw new ApiError("Invalid filter operator", 400);
             }
-
             if (
-              typeof rawValue !== "string" ||
-              rawValue.trim() === "" ||
-              !Number.isFinite(Number(rawValue))
+              typeof raw !== "string" ||
+              raw.trim() === "" ||
+              !Number.isFinite(Number(raw))
             ) {
               throw new ApiError("Filter value must be numeric", 400);
             }
-
-            conditions[`$${operator}`] = Number(rawValue);
+            conditions[`$${op}`] = Number(raw);
           }
-
-          if (Object.keys(conditions).length === 0) {
+          if (!Object.keys(conditions).length) {
             throw new ApiError("Empty filter conditions", 400);
           }
-
           filters[field] = conditions;
         } else {
           if (
@@ -77,31 +85,53 @@ class ApiFeatures {
           ) {
             throw new ApiError("Filter value must be numeric", 400);
           }
-
           filters[field] = Number(value);
         }
-
         continue;
       }
 
-      // category و brand لازم يكونوا MongoDB ObjectId صحيح
-      if (
-        typeof value !== "string" ||
-        !mongoose.isValidObjectId(value)
-      ) {
-        throw new ApiError(`Invalid ID for '${field}'`, 400);
+      // ── OBJECT ID (category, brand) ──
+      if (OBJECT_ID_FIELDS.includes(field)) {
+        if (typeof value !== "string" || !mongoose.isValidObjectId(value)) {
+          throw new ApiError(`Invalid ID for '${field}'`, 400);
+        }
+        filters[field] = value;
+        continue;
       }
 
-      filters[field] = value;
+      // ── ENUM (role) ──
+      if (ENUM_FIELDS[field]) {
+        if (typeof value !== "string" || !ENUM_FIELDS[field].includes(value)) {
+          throw new ApiError(
+            `Invalid value for '${field}' — allowed: ${ENUM_FIELDS[field].join(", ")}`,
+            400,
+          );
+        }
+        filters[field] = value;
+        continue;
+      }
+
+      // ── BOOLEAN (active) ──
+      if (BOOLEAN_FIELDS.includes(field)) {
+        if (value !== "true" && value !== "false") {
+          throw new ApiError(
+            `Invalid value for '${field}' — must be true or false`,
+            400,
+          );
+        }
+        filters[field] = value === "true";
+        continue;
+      }
     }
 
     this.mongooseQuery = this.mongooseQuery.find(filters);
+    this.filters = filters;
     return this;
   }
 
-
   sort() {
     if (this.queryString.sort) {
+      // "price,-name" → "price -name"
       const sortBy = this.queryString.sort.split(",").join(" ");
       this.mongooseQuery = this.mongooseQuery.sort(sortBy);
     } else {
@@ -112,6 +142,7 @@ class ApiFeatures {
 
   limitFields() {
     if (this.queryString.fields) {
+      // "name,price" → "name price"
       const fields = this.queryString.fields.split(",").join(" ");
       this.mongooseQuery = this.mongooseQuery.select(fields);
     } else {
@@ -120,42 +151,40 @@ class ApiFeatures {
     return this;
   }
 
-  //search
   search(modelName) {
     const rawKeyword = this.queryString.keyword;
 
-    if (rawKeyword !== undefined) {
-      // Validate the input type
-      if (
-        typeof rawKeyword !== "string" ||
-        rawKeyword.trim().length === 0 ||
-        rawKeyword.length > 100
-      ) {
-        throw new Error("Invalid search keyword");
-      }
-
-      // Sanitize the keyword
-      const keyword = escapeRegex(rawKeyword.trim());
-
-      const regex = { $regex: keyword, $options: "i" };
-
-      let query;
-
-      if (modelName === "Product") {
-        query = {
-          $or: [
-            { title: regex },
-            { description: regex },
-            { colors: regex },
-          ],
-        };
-      } else {
-        query = { name: regex };
-      }
-
-      this.mongooseQuery = this.mongooseQuery.find(query);
+    // Empty / missing keyword → skip search, don't throw
+    if (rawKeyword === undefined || rawKeyword === null || rawKeyword === "") {
+      return this;
     }
 
+    // Validate keyword type & length
+    if (
+      typeof rawKeyword !== "string" ||
+      rawKeyword.trim().length === 0 ||
+      rawKeyword.length > 100
+    ) {
+      throw new ApiError("Invalid search keyword", 400);
+    }
+
+    const keyword = escapeRegex(rawKeyword.trim());
+    const regex = { $regex: keyword, $options: "i" };
+
+    let query;
+    if (modelName === "Product") {
+      query = {
+        $or: [
+          { title: regex },
+          { description: regex },
+          { colors: regex },
+        ],
+      };
+    } else {
+      query = { name: regex };
+    }
+
+    this.mongooseQuery = this.mongooseQuery.find(query);
     return this;
   }
 
@@ -165,22 +194,17 @@ class ApiFeatures {
     const skip = (page - 1) * limit;
     const endIndex = page * limit;
 
-    // Pagination result
-    const pagination = {};
-    pagination.currentPage = page;
-    pagination.limit = limit;
-    pagination.numberOfPages = Math.ceil(countDocuments / limit);
+    const pagination = {
+      currentPage: page,
+      limit,
+      numberOfPages: Math.ceil(countDocuments / limit),
+      totalResults: countDocuments, // exact count — used by frontend stats
+    };
 
-    // next page
-    if (endIndex < countDocuments) {
-      pagination.next = page + 1;
-    }
-    if (skip > 0) {
-      pagination.prev = page - 1;
-    }
+    if (endIndex < countDocuments) pagination.next = page + 1;
+    if (skip > 0) pagination.prev = page - 1;
 
     this.mongooseQuery = this.mongooseQuery.skip(skip).limit(limit);
-
     this.paginationResult = pagination;
     return this;
   }

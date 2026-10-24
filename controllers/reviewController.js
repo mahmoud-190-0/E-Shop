@@ -1,7 +1,86 @@
-
+// controllers/reviewController.js
+const asyncHandler = require("express-async-handler");
 const factory = require("./factoryHandler");
 const Review = require("../models/reviewModel");
 
+/* ... keep existing exports ... */
+
+// @desc    Get all reviews (admin) with populated user + product
+// @route   GET /api/v1/reviews/admin
+// @access  Private (admin, manager)
+exports.getAllReviewsAdmin = asyncHandler(async (req, res) => {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
+    const skip = (page - 1) * limit;
+
+    const filter = {};
+
+    // Filter by rating
+    if (req.query.rating) {
+        const r = parseInt(req.query.rating);
+        if (r >= 1 && r <= 5) filter.ratings = r;
+    }
+
+    // Filter by product
+    if (req.query.productId) filter.product = req.query.productId;
+
+    // Filter by user
+    if (req.query.userId) filter.user = req.query.userId;
+
+    const [reviews, total] = await Promise.all([
+        Review.find(filter)
+            .populate("user", "name email profileImage")
+            .populate("product", "title imageCover price")
+            .sort(req.query.sort === "oldest" ? "createdAt" : "-createdAt")
+            .skip(skip)
+            .limit(limit),
+        Review.countDocuments(filter),
+    ]);
+
+    res.status(200).json({
+        status: "success",
+        results: reviews.length,
+        page,
+        total,
+        numberOfPages: Math.ceil(total / limit),
+        data: reviews,
+    });
+});
+
+// @desc    Get review statistics
+// @route   GET /api/v1/reviews/stats
+// @access  Private (admin, manager)
+exports.getReviewStats = asyncHandler(async (req, res) => {
+    const stats = await Review.aggregate([
+        {
+            $group: {
+                _id: null,
+                total: { $sum: 1 },
+                averageRating: { $avg: "$ratings" },
+                fiveStars: { $sum: { $cond: [{ $eq: ["$ratings", 5] }, 1, 0] } },
+                fourStars: { $sum: { $cond: [{ $eq: ["$ratings", 4] }, 1, 0] } },
+                threeStars: { $sum: { $cond: [{ $eq: ["$ratings", 3] }, 1, 0] } },
+                twoStars: { $sum: { $cond: [{ $eq: ["$ratings", 2] }, 1, 0] } },
+                oneStar: { $sum: { $cond: [{ $eq: ["$ratings", 1] }, 1, 0] } },
+            },
+        },
+    ]);
+
+    const result = stats[0] || {
+        total: 0,
+        averageRating: 0,
+        fiveStars: 0,
+        fourStars: 0,
+        threeStars: 0,
+        twoStars: 0,
+        oneStar: 0,
+    };
+
+    res.status(200).json({
+        status: "success",
+        data: result,
+    });
+});
 
 /* ************ REVIEW WITH PRODUCT  MIDDLEWARE ***********/
 
